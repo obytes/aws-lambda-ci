@@ -72,14 +72,18 @@ The user/role that call this pipeline should have these permissions attached to 
                     "lambda:UpdateFunctionConfiguration",
                     "lambda:UpdateFunctionCode",
                     "lambda:UpdateAlias",
-                    "lambda:PublishVersion"
+                    "lambda:PublishVersion",
+                    "lambda:GetFunction"
                 ],
                 "Resource": "arn:aws:lambda:us-east-1:YOUR_ACCOUNT_ID:function:function-name"
             },
             {
                 "Sid": "",
                 "Effect": "Allow",
-                "Action": "lambda:PublishLayerVersion",
+                "Action": [
+                    "lambda:PublishLayerVersion",
+                    "Lambda:ListLayerVersions"
+                ],
                 "Resource": "arn:aws:lambda:us-east-1:YOUR_ACCOUNT_ID:layer:function-layer-name"
             },
             {
