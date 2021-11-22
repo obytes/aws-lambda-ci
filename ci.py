@@ -312,7 +312,7 @@ def application_code_changed():
 # -------
 def fetch_dependencies():
     print(f"🧲\t{COL_YEL}Fetching{COL_END} dependencies...")
-    descriptor = copy2(CURRENT_PACKAGES_DESCRIPTOR_PATH, f"{WORKING_DIR}/current-{DESCRIPTORS[LANGUAGE]}")
+    descriptor = copy2(CURRENT_PACKAGES_DESCRIPTOR_PATH, f"{WORKING_DIR}/{DESCRIPTORS[LANGUAGE]}")
     descriptor = os.path.basename(descriptor)
     if LANGUAGE == "python":
         pip(descriptor)
