@@ -45,6 +45,10 @@ parser.add_argument('--aws-profile-name', dest='aws_profile_name', required=Fals
 parser.add_argument('--watch-log-stream', dest='watch_log_stream', required=False, default=False, action='store_true',
                     help="AWS profile name (if not provided, will use default aws env variables)")
 
+# To use custom lambci docker repository, eg: ECR repository.
+parser.add_argument('--build-docker-repo', dest='build_docker_repo', required=False, default="lambci/lambda",
+                    help="Use custom lambci/lambda build docker repository")
+
 args = parser.parse_args()
 
 # Validation
@@ -135,6 +139,9 @@ DEP_CURRENT_S3_KEY = f"{APP_S3_KEY_PREFIX}/{FUNCTION_LAYER_CURRENT_GIT_VERSION}/
 # Internals
 APP_ZIP_FILENAME = f"{WORKING_DIR}/app"
 DEP_ZIP_FILENAME = f"{WORKING_DIR}/deps"
+
+# Build repo
+BUILD_DOCKER_REPO = args.build_docker_repo
 
 COL_BLU = "\033[94m"
 COL_GRN = "\033[92m"
@@ -335,7 +342,7 @@ def npm():
 def docker_run(install_cmd):
     docker_cmd = (
         "docker", "run", f'-v "{WORKING_DIR}":/var/task',
-        f"--rm lambci/lambda:build-{FUNCTION_RUNTIME}",
+        f"--rm {BUILD_DOCKER_REPO}:build-{FUNCTION_RUNTIME}",
         f'/bin/sh -c "{install_cmd}"'
     )
     try:
