@@ -33,7 +33,9 @@ parser.add_argument('--function-layer-name', dest='function_layer_name', require
                     help="AWS Lambda layer name (eg: demo-lambda-dependencies)")
 
 parser.add_argument('--app-src-path', dest='app_src_path', required=False, default=".",
-                    help="Lambda function sources directory that will be archived (eg: demo-lambda/src)")
+                    help="Lambda function sources directory (eg: demo-lambda/src) or an archive (eg: demo-lambda.zip)")
+parser.add_argument('--app-packages-path', dest='packages_src_path', required=False,
+                    help="Lambda function packages archive (eg: demo-dependencies.zip)")
 parser.add_argument('--app-packages-descriptor-path', dest='app_packages_descriptor_path', required=False,
                     default="requirements.txt",
                     help="Packages descriptor path (eg: demo-lambda/requirements.txt)")
@@ -44,6 +46,8 @@ parser.add_argument('--aws-profile-name', dest='aws_profile_name', required=Fals
                     help="AWS profile name (if not provided, will use default aws env variables)")
 parser.add_argument('--watch-log-stream', dest='watch_log_stream', required=False, default=False, action='store_true',
                     help="AWS profile name (if not provided, will use default aws env variables)")
+parser.add_argument('--disable-versioning', dest='versioning_is_disabled', required=False, default=False, action='store_true',
+                    help="Disables versioning for lambda fuctions")
 
 # To use custom lambci docker repository, eg: ECR repository.
 parser.add_argument('--build-docker-repo', dest='build_docker_repo', required=False, default="lambci/lambda",
@@ -53,6 +57,7 @@ args = parser.parse_args()
 
 # Validation
 # ----------
+versioning_enabled = not args.versioning_is_disabled
 if args.aws_profile_name:
     boto3.setup_default_session(profile_name=args.aws_profile_name)
 
@@ -104,7 +109,10 @@ FUNCTION_NAME = args.function_name
 FUNCTION_RUNTIME = args.function_runtime
 FUNCTION_ALIAS_NAME = args.function_alias_name
 FUNCTION_LAYER_NAME = args.function_layer_name
-FUNCTION_LATEST_CONFIG = lam.get_function(FunctionName=FUNCTION_NAME, Qualifier=FUNCTION_ALIAS_NAME)["Configuration"]
+if versioning_enabled:
+    FUNCTION_LATEST_CONFIG = (lam.get_function(FunctionName=FUNCTION_NAME, Qualifier=FUNCTION_ALIAS_NAME))["Configuration"]
+else:
+    FUNCTION_LATEST_CONFIG = (lam.get_function(FunctionName=FUNCTION_NAME))["Configuration"]
 FUNCTION_REGION = FUNCTION_LATEST_CONFIG["FunctionArn"].split(":")[3]
 FUNCTION_LATEST_VERSION = FUNCTION_LATEST_CONFIG["Version"]
 FUNCTION_LATEST_CODE_SHA = FUNCTION_LATEST_CONFIG["CodeSha256"]
@@ -125,6 +133,7 @@ PACKAGES_DESCRIPTOR_S3_KEY = f"{APP_S3_KEY_PREFIX}/latest/{DESCRIPTORS[LANGUAGE]
 CURRENT_PACKAGES_DESCRIPTOR_PATH = args.app_packages_descriptor_path
 PREVIOUS_PACKAGES_DESCRIPTOR_PATH = f"{WORKING_DIR}/prev-{DESCRIPTORS[LANGUAGE]}"
 APP_SRC_PATH = args.app_src_path
+DEP_SRC_PATH = args.packages_src_path
 
 # Lambda Version
 SOURCE_VERSION = args.source_version
@@ -169,12 +178,18 @@ def build():
         deps_changed = application_dependencies_changed()
 
     if deps_changed:
-        # FETCH/PACKAGE DEPENDENCIES
-        fetch_dependencies()
-        package_dependencies_dist()
+        if DEP_SRC_PATH:
+            copy2(DEP_SRC_PATH, f"{DEP_ZIP_FILENAME}.zip")
+        else:
+            # FETCH/PACKAGE DEPENDENCIES
+            fetch_dependencies()
+            package_dependencies_dist()
 
     # FETCH/PACKAGE APP
-    package_app_dist()
+    if os.path.isdir(APP_SRC_PATH):
+        package_app_dist()
+    else:
+        copy2(APP_SRC_PATH, f"{APP_ZIP_FILENAME}.zip")
     code_changed = application_code_changed()
 
     return deps_changed, code_changed
@@ -207,7 +222,7 @@ def deploy(deps_changed, code_changed):
             Description=SOURCE_VERSION,
             Content={
                 'S3Bucket': APP_BUCKET,
-                'S3Key': DEP_VERSION_S3_KEY,
+                'S3Key': DEP_VERSION_S3_KEY if versioning_enabled else DEP_LATEST_S3_KEY,
             },
             CompatibleRuntimes=[FUNCTION_RUNTIME],
         )
@@ -231,7 +246,7 @@ def deploy(deps_changed, code_changed):
         lam.update_function_code(
             FunctionName=FUNCTION_NAME,
             S3Bucket=APP_BUCKET,
-            S3Key=APP_VERSION_S3_KEY,
+            S3Key=APP_VERSION_S3_KEY if versioning_enabled else APP_LATEST_S3_KEY,
         )
         print("✅\tApplication deployed!")
     return layer_version
@@ -278,7 +293,7 @@ def key_exist(key):
 
 
 def get_cached_package_descriptor():
-    print(f"👀\t{COL_WHT}Checking{COL_END} if package descriptor cache exist on S3...")
+    print(f"👀\t{COL_WHT}Checking{COL_END} if package descriptor cache exists on S3...")
     if key_exist(PACKAGES_DESCRIPTOR_S3_KEY):
         print("✅\tRemote packages descriptor found!")
         s3.Bucket(APP_BUCKET).download_file(PACKAGES_DESCRIPTOR_S3_KEY, PREVIOUS_PACKAGES_DESCRIPTOR_PATH)
@@ -319,7 +334,7 @@ def application_code_changed():
 # -------
 def fetch_dependencies():
     print(f"🧲\t{COL_YEL}Fetching{COL_END} dependencies...")
-    descriptor = copy2(CURRENT_PACKAGES_DESCRIPTOR_PATH, f"{WORKING_DIR}/current-{DESCRIPTORS[LANGUAGE]}")
+    descriptor = copy2(CURRENT_PACKAGES_DESCRIPTOR_PATH, f"{WORKING_DIR}/{DESCRIPTORS[LANGUAGE]}")
     descriptor = os.path.basename(descriptor)
     if LANGUAGE == "python":
         pip(descriptor)
@@ -340,6 +355,7 @@ def npm():
 
 
 def docker_run(install_cmd):
+    dockerp = subprocess.run( [ 'docker', 'info' ] , stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     docker_cmd = (
         "docker", "run", f'-v "{WORKING_DIR}":/var/task',
         f"--rm {BUILD_DOCKER_REPO}:build-{FUNCTION_RUNTIME}",
@@ -348,15 +364,15 @@ def docker_run(install_cmd):
     try:
         with open(f"/tmp/{SOURCE_VERSION}-deps.log", 'w') as output:
             subprocess.check_call(
-                " ".join(docker_cmd),
+                " ".join(docker_cmd) if (dockerp.returncode == 0) else install_cmd,
                 shell=True,
                 stdout=output,
-                stderr=subprocess.STDOUT
+                stderr=subprocess.STDOUT,
+                cwd=WORKING_DIR
             )
     except subprocess.CalledProcessError:
         print(open(f"/tmp/{SOURCE_VERSION}-deps.log", 'r').read())
         exit(1)
-
 
 # Package
 # -------
@@ -377,14 +393,16 @@ def package_app_dist():
 def push_dependencies():
     print(f"🚀\t{COL_BLU}Pushing{COL_END} dependencies distribution to S3...")
     s3.meta.client.upload_file(f"{DEP_ZIP_FILENAME}.zip", APP_BUCKET, DEP_LATEST_S3_KEY)
-    s3.meta.client.upload_file(f"{DEP_ZIP_FILENAME}.zip", APP_BUCKET, DEP_VERSION_S3_KEY)
+    if versioning_enabled:
+        s3.meta.client.upload_file(f"{DEP_ZIP_FILENAME}.zip", APP_BUCKET, DEP_VERSION_S3_KEY)
     print("✅\tDependencies distribution pushed!")
 
 
 def push_application():
     print(f"🚀\t{COL_BLU}Pushing{COL_END} application distribution to S3...")
     s3.meta.client.upload_file(f"{APP_ZIP_FILENAME}.zip", APP_BUCKET, APP_LATEST_S3_KEY)
-    s3.meta.client.upload_file(f"{APP_ZIP_FILENAME}.zip", APP_BUCKET, APP_VERSION_S3_KEY)
+    if versioning_enabled:
+        s3.meta.client.upload_file(f"{APP_ZIP_FILENAME}.zip", APP_BUCKET, APP_VERSION_S3_KEY)
     print("✅\tApplication distribution pushed!")
 
 
@@ -465,12 +483,12 @@ def ci():
     print(f"📁\tNext version: {COL_GRN}{SOURCE_VERSION}{COL_END}")
     deps_changed, code_changed = build()
     if not deps_changed and not code_changed:
-        print("🎉\tCode and dependencies not changed, nothing to be done!")
+        print("🎉\tCode and dependencies haven't changed, there is nothing to be done!")
         summary(FUNCTION_LATEST_VERSION, FUNCTION_LATEST_LAYER_VERSION, )
     else:
         push(deps_changed, code_changed)
         layer_published_version = deploy(deps_changed, code_changed)
-        lambda_published_version = publish()
+        lambda_published_version = publish() if versioning_enabled else "latest"
         summary(
             lambda_published_version, layer_published_version or FUNCTION_LATEST_LAYER_VERSION,
             code_changed=code_changed, deps_changed=deps_changed,
