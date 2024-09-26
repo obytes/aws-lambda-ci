@@ -49,6 +49,9 @@ parser.add_argument('--watch-log-stream', dest='watch_log_stream', required=Fals
 parser.add_argument('--build-docker-repo', dest='build_docker_repo', required=False, default="lambci/lambda",
                     help="Use custom lambci/lambda build docker repository")
 
+parser.add_argument('--build-docker-image', dest='build_docker_image', required=False, default=None,
+                    help="Build custom docker image tag (if not provided, will use build-{[python|node][runtime-version]})")
+
 args = parser.parse_args()
 
 # Validation
@@ -108,6 +111,7 @@ FUNCTION_LATEST_CONFIG = lam.get_function(FunctionName=FUNCTION_NAME, Qualifier=
 FUNCTION_REGION = FUNCTION_LATEST_CONFIG["FunctionArn"].split(":")[3]
 FUNCTION_LATEST_VERSION = FUNCTION_LATEST_CONFIG["Version"]
 FUNCTION_LATEST_CODE_SHA = FUNCTION_LATEST_CONFIG["CodeSha256"]
+FUNCTION_LATEST_LAYERS = FUNCTION_LATEST_CONFIG.get("Layers", [])
 FUNCTION_CURRENT_GIT_VERSION = FUNCTION_LATEST_CONFIG["Description"] if FUNCTION_LATEST_CONFIG else "Virgin"
 FUNCTION_LATEST_LAYER_CONFIG = lam.list_layer_versions(LayerName=FUNCTION_LAYER_NAME, MaxItems=1)["LayerVersions"]
 FUNCTION_LATEST_LAYER_VERSION = FUNCTION_LATEST_LAYER_CONFIG[0]["Version"] if FUNCTION_LATEST_LAYER_CONFIG else 0
@@ -142,6 +146,7 @@ DEP_ZIP_FILENAME = f"{WORKING_DIR}/deps"
 
 # Build repo
 BUILD_DOCKER_REPO = args.build_docker_repo
+BUILD_DOCKER_IMAGE = args.build_docker_image
 
 COL_BLU = "\033[94m"
 COL_GRN = "\033[92m"
@@ -167,6 +172,10 @@ def build():
     found_cache = get_cached_package_descriptor()
     if found_cache:
         deps_changed = application_dependencies_changed()
+
+    # Force Rebuild deps if there is no Layer attached to the lambda
+    if not FUNCTION_LATEST_LAYERS:
+        deps_changed = True
 
     if deps_changed:
         # FETCH/PACKAGE DEPENDENCIES
@@ -340,9 +349,13 @@ def npm():
 
 
 def docker_run(install_cmd):
+    if BUILD_DOCKER_IMAGE:
+        image_tag = BUILD_DOCKER_IMAGE
+    else:
+        image_tag = f"build-{FUNCTION_RUNTIME}"
     docker_cmd = (
         "docker", "run", f'-v "{WORKING_DIR}":/var/task',
-        f"--rm {BUILD_DOCKER_REPO}:build-{FUNCTION_RUNTIME}",
+        f"--rm {BUILD_DOCKER_REPO}:{image_tag}",
         f'/bin/sh -c "{install_cmd}"'
     )
     try:
@@ -474,7 +487,7 @@ def ci():
         summary(
             lambda_published_version, layer_published_version or FUNCTION_LATEST_LAYER_VERSION,
             code_changed=code_changed, deps_changed=deps_changed,
-        )
+                                      )
 
 
 # EntryPoint

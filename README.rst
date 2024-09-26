@@ -154,13 +154,13 @@ These are the available arguments:
 |                                +----------+--------------------------------------+------------------------------------------------------------------------------------------+
 |                                | Optional | Default: Random hash                 | Allowed: ``commit`` hash | ``tag`` ver                                                   |
 +--------------------------------+----------+--------------------------------------+------------------------------------------------------------------------------------------+
-| --aws-profile-name             | AWS profile name (if not provided, will use default aws env variables)                                                                     |
+| --build-docker-repo            | Use custom build docker repository (other than lambci/lambda)                                                                              |
 |                                +----------+--------------------------------------+------------------------------------------------------------------------------------------+
-|                                | Optional | Default: None                        | Allowed: existing aws profile name                                                       |
+|                                | Optional | Default: lambci/lambda               | Allowed: a valid docker repo without image tag part                                      |
 +--------------------------------+----------+--------------------------------------+------------------------------------------------------------------------------------------+
-| --watch-log-stream             | Watch lambda log stream in realtime after publishing the function                                                                          |
+| --build-docker-image           | Custom build docker image tag (if not provided, will use build-{[python|node][runtime-version]}) lambci/lambda repo                        |
 |                                +----------+--------------------------------------+------------------------------------------------------------------------------------------+
-|                                | Optional | Default: True                        | Allowed: Boolean                                                                         |
+|                                | Optional | Default: None                        | Allowed: an existing docker image tag                                                    |
 +--------------------------------+----------+--------------------------------------+------------------------------------------------------------------------------------------+
 
 
@@ -172,14 +172,16 @@ Example
     aws-lambda-ci \
     --app-s3-bucket "kodhive-prd-useast1-ippan-core-artifacts" \
     --function-name "useast1-mimoto-api-v1-codeless" \
-    --function-runtime "python3.7" \
+    --function-runtime "python3.11" \
     --function-alias-name "latest" \
     --function-layer-name "useast1-mimoto-api-v1-codeless-deps" \
     --app-src-path "app/api/src" \
     --app-packages-descriptor-path "app/api/src/requirements/lambda.txt" \
     --source-version "1.0.1" \
     --aws-profile-name "kodhive_prd" \
-    --watch-log-stream
+    --watch-log-stream \
+    --build-docker-repo public.ecr.aws/sam/build-python3.11 \
+    --build-docker-image latest
 
 Demos
 ======
